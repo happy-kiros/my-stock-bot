@@ -18,8 +18,10 @@ st.write(os.listdir())
 
 try:
     stocks_df = pd.read_excel("stocks.xlsx")
-except:
-    st.error("stocks.xlsx 파일이 없습니다.")
+    st.write("로드 성공")
+except Exception as e:
+    st.error("에러 발생:")
+    st.exception(e)
     st.stop()
 
 # =========================
