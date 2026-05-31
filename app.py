@@ -1,4 +1,8 @@
+import os
 import streamlit as st
+
+st.write("cwd:", os.getcwd())
+st.write("files:", os.listdir())
 import pandas as pd
 import yfinance as yf
 
