@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+from streamlit_autorefresh import st_autorefresh
+st_autorefresh(interval=300000, key="refresh")
 
 st.set_page_config(page_title="모바일 주식 자동검색기", layout="wide")
 
