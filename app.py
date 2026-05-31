@@ -5,7 +5,13 @@ import yfinance as yf
 st.set_page_config(page_title="모바일 주식 자동검색기", layout="wide")
 
 # =========================
-# 엑셀 종목 불러오기
+# 세션 상태 (알림 중복 방지)
+# =========================
+if "sent_alerts" not in st.session_state:
+    st.session_state.sent_alerts = set()
+
+# =========================
+# 종목 불러오기
 # =========================
 try:
     stocks_df = pd.read_excel("stocks.xlsx")
@@ -14,7 +20,7 @@ except:
     st.stop()
 
 # =========================
-# 기술지표 계산 함수
+# RSI
 # =========================
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -25,28 +31,25 @@ def calculate_rsi(series, period=14):
     avg_loss = loss.rolling(period).mean()
 
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + rs))
 
-
+# =========================
+# MACD
+# =========================
 def calculate_macd(series):
     ema12 = series.ewm(span=12).mean()
     ema26 = series.ewm(span=26).mean()
-
     macd = ema12 - ema26
     signal = macd.ewm(span=9).mean()
-
     return macd, signal
 
-
 # =========================
-# 점수 계산 함수 (엑셀 로직 그대로)
+# 점수 계산 (엑셀 로직 그대로)
 # =========================
 def calculate_score(rsi, gap20, drawdown, macd_cross, volume_ratio, alignment, gc_status):
 
     score = 0
 
-    # 하락률
     if drawdown <= -30:
         score += 30
     elif drawdown <= -20:
@@ -54,7 +57,6 @@ def calculate_score(rsi, gap20, drawdown, macd_cross, volume_ratio, alignment, g
     elif drawdown <= -10:
         score += 10
 
-    # RSI
     if rsi <= 30:
         score += 30
     elif rsi <= 35:
@@ -62,7 +64,6 @@ def calculate_score(rsi, gap20, drawdown, macd_cross, volume_ratio, alignment, g
     elif rsi <= 45:
         score += 10
 
-    # 괴리율
     if gap20 <= -12:
         score += 30
     elif gap20 <= -8:
@@ -70,27 +71,22 @@ def calculate_score(rsi, gap20, drawdown, macd_cross, volume_ratio, alignment, g
     elif gap20 <= -5:
         score += 10
 
-    # MACD
     if macd_cross:
         score += 15
 
-    # 거래량
     if volume_ratio >= 1.5:
         score += 10
 
-    # 정배열
     if alignment:
         score += 10
 
-    # 골든크로스
     if gc_status:
         score += 15
 
     return score
 
-
 # =========================
-# 종목 분석 함수
+# 종목 분석
 # =========================
 @st.cache_data(ttl=300)
 def analyze_stock(name, ticker):
@@ -107,8 +103,7 @@ def analyze_stock(name, ticker):
         current_price = float(close.iloc[-1])
 
         # RSI
-        rsi_series = calculate_rsi(close)
-        rsi = float(rsi_series.iloc[-1])
+        rsi = float(calculate_rsi(close).iloc[-1])
 
         # MA
         ma5 = close.rolling(5).mean()
@@ -122,16 +117,12 @@ def analyze_stock(name, ticker):
         prev_ma5 = ma5.iloc[-2]
         prev_ma20 = ma20.iloc[-2]
 
-        # 골든크로스
         gc_status = (prev_ma5 <= prev_ma20 and current_ma5 > current_ma20)
-
-        # 정배열
         alignment = (current_ma5 > current_ma20 > current_ma60)
 
         # 거래량
         avg_volume = volume.rolling(5).mean().iloc[-1]
         current_volume = volume.iloc[-1]
-
         volume_ratio = float(current_volume / avg_volume) if avg_volume > 0 else 0
 
         # MACD
@@ -145,24 +136,20 @@ def analyze_stock(name, ticker):
         high_price = close.max()
         drawdown = ((current_price - high_price) / high_price) * 100
 
-        # 점수 계산 (핵심)
+        # 점수
         score = calculate_score(
-            rsi,
-            gap20,
-            drawdown,
-            macd_cross,
-            volume_ratio,
-            alignment,
-            gc_status
+            rsi, gap20, drawdown,
+            macd_cross, volume_ratio,
+            alignment, gc_status
         )
 
-        # 최종 판정
+        # 신호
         if score >= 90:
             signal_text = "강력매수"
-        elif score >= 70:
-            signal_text = "매수관심"
-        elif score >= 50:
-            signal_text = "관심구간"
+        elif score >= 80:
+            signal_text = "매수신호"
+        elif score >= 60:
+            signal_text = "관심"
         else:
             signal_text = "관망"
 
@@ -170,15 +157,12 @@ def analyze_stock(name, ticker):
             "종목명": name,
             "현재가": round(current_price, 0),
             "RSI": round(rsi, 2),
-            "괴리율(%)": round(gap20, 2),
-            "거래량비율": round(volume_ratio, 2),
             "점수": score,
             "신호": signal_text
         }
 
     except:
         return None
-
 
 # =========================
 # 전체 분석
@@ -200,20 +184,35 @@ for idx, row in stocks_df.iterrows():
 df = pd.DataFrame(results)
 
 if df.empty:
-    st.warning("분석 결과가 없습니다.")
+    st.warning("분석 결과 없음")
     st.stop()
 
 df = df.sort_values("점수", ascending=False)
 
 # =========================
+# 🔔 80점 이상 자동 알림 (중복 방지)
+# =========================
+for _, row in df.iterrows():
+
+    if row["점수"] >= 80:
+
+        key = row["종목명"]
+
+        if key not in st.session_state.sent_alerts:
+
+            st.error(f"🚨 매수 신호: {row['종목명']} ({row['점수']}점)")
+
+            st.session_state.sent_alerts.add(key)
+
+# =========================
 # UI
 # =========================
-st.title("📊 모바일 주식 자동검색기 (강화 버전)")
+st.title("📊 모바일 주식 자동검색기")
 
 tab1, tab2, tab3 = st.tabs([
-    "전체 TOP",
+    "전체",
     "TOP 3",
-    "점수 차트"
+    "차트"
 ])
 
 with tab1:
