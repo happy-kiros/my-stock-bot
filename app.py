@@ -1,16 +1,9 @@
-import os
 import streamlit as st
-
-st.write("cwd:", os.getcwd())
-st.write("files:", os.listdir())
 import pandas as pd
 import yfinance as yf
 
 st.set_page_config(
     page_title="모바일 주식 자동검색기",    layout="wide")
-
-import os
-st.write(os.listdir())
 
 # =========================
 # 종목 불러오기
