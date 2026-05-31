@@ -1,164 +1,167 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import requests
-import time
-from datetime import datetime
+
+st.set_page_config(page_title="모바일 주식 자동검색기", layout="wide")
 
 # =========================
-# 텔레그램 설정
-# =========================
-TELEGRAM_TOKEN = "8117624184:AAFa8oVpO1Xx-ep8RdA14hRgNbUMKG_28Js"
-CHAT_ID = "6626061234"
 
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": msg}
-    try:
-        requests.post(url, data=data)
-    except:
-        pass
-
+# 종목 불러오기
 
 # =========================
-# 중복 방지 + 날짜 초기화
-# =========================
-today = datetime.now().date()
 
-if "sent" not in st.session_state:
-    st.session_state.sent = set()
-
-if "last_reset" not in st.session_state:
-    st.session_state.last_reset = today
-
-# 🔥 하루 1회 초기화
-if st.session_state.last_reset != today:
-    st.session_state.sent = set()
-    st.session_state.last_reset = today
-
+try:
+stocks_df = pd.read_excel("stocks.xlsx")
+except:
+st.error("stocks.xlsx 파일이 없습니다.")
+st.stop()
 
 # =========================
-# 종목 리스트
-# =========================
-stocks = {
-    "삼성전자": "005930.KS",
-    "SK하이닉스": "000660.KS",
-    "NAVER": "035420.KS",
-    "현대차": "005380.KS",
-    "LG에너지솔루션": "373220.KS"
-}
 
+# 점수 계산
 
 # =========================
-# 데이터 수집
-# =========================
-def get_data(name, ticker):
-    try:
-        df = yf.Ticker(ticker).history(period="3mo")
 
-        if df is None or len(df) < 20:
-            return None
+@st.cache_data(ttl=300)
+def analyze_stock(name, ticker):
+try:
+df = yf.Ticker(ticker).history(period="3mo")
 
-        df["MA5"] = df["Close"].rolling(5).mean()
-        df["MA20"] = df["Close"].rolling(20).mean()
-        df["VOL_MA20"] = df["Volume"].rolling(20).mean()
-
-        df = df.dropna()
-
-        latest = df.iloc[-1]
-        prev = df.iloc[-2]
-
-        price = latest["Close"]
-        ma5 = latest["MA5"]
-        ma20 = latest["MA20"]
-
-        change = ((price - prev["Close"]) / prev["Close"]) * 100
-
-        volume_ratio = latest["Volume"] / latest["VOL_MA20"]
-        golden = ma5 > ma20
-
-        score = 0
-
-        if change > 0:
-            score += 20
-        if change > 2:
-            score += 10
-        if price > ma5:
-            score += 20
-        if price > ma20:
-            score += 25
-        if golden:
-            score += 20
-        if volume_ratio > 1.5:
-            score += 15
-
-        return {
-            "종목명": name,
-            "현재가": round(price, 0),
-            "등락률(%)": round(change, 2),
-            "거래량비율": round(volume_ratio, 2),
-            "골든크로스": "YES" if golden else "NO",
-            "매수점수": score
-        }
-
-    except Exception:
+```
+    if len(df) < 30:
         return None
 
+    df["MA5"] = df["Close"].rolling(5).mean()
+    df["MA20"] = df["Close"].rolling(20).mean()
+    df["VOL20"] = df["Volume"].rolling(20).mean()
+
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    score = 0
+
+    price = float(latest["Close"])
+    ma5 = float(latest["MA5"])
+    ma20 = float(latest["MA20"])
+
+    change = ((price - float(prev["Close"])) / float(prev["Close"])) * 100
+
+    volume_ratio = (
+        float(latest["Volume"]) / float(latest["VOL20"])
+        if float(latest["VOL20"]) > 0
+        else 0
+    )
+
+    golden = ma5 > ma20
+
+    if change > 0:
+        score += 20
+
+    if change > 2:
+        score += 10
+
+    if price > ma5:
+        score += 20
+
+    if price > ma20:
+        score += 25
+
+    if golden:
+        score += 20
+
+    if volume_ratio > 1.5:
+        score += 15
+
+    return {
+        "종목명": name,
+        "현재가": round(price, 0),
+        "등락률(%)": round(change, 2),
+        "거래량비율": round(volume_ratio, 2),
+        "골든크로스": "YES" if golden else "NO",
+        "매수점수": score,
+    }
+
+except:
+    return None
+```
 
 # =========================
-# 자동 실행 (핵심)
+
+# 전체 분석
+
 # =========================
-st.title("📊 모바일 주식 자동검색기 (6단계) - 무인 감시")
 
-placeholder = st.empty()
+results = []
 
-while True:
+progress = st.progress(0)
 
-    data = []
+total = len(stocks_df)
 
-    for name, ticker in stocks.items():
-        result = get_data(name, ticker)
-        if result:
-            data.append(result)
+for idx, row in stocks_df.iterrows():
 
-    df = pd.DataFrame(data)
+```
+result = analyze_stock(
+    row["종목명"],
+    row["종목코드"]
+)
 
-    if not df.empty:
-        df = df.sort_values("매수점수", ascending=False)
+if result:
+    results.append(result)
 
-        with placeholder.container():
+progress.progress((idx + 1) / total)
+```
 
-            st.subheader("🔥 전체 TOP")
-            st.dataframe(df, use_container_width=True)
+df = pd.DataFrame(results)
 
-            st.subheader("🚀 TOP 3")
-            st.dataframe(df.head(3), use_container_width=True)
+if df.empty:
+st.warning("분석 가능한 종목이 없습니다.")
+st.stop()
 
-            st.subheader("📊 점수 비교")
-            st.bar_chart(df.set_index("종목명")["매수점수"])
+df = df.sort_values(
+by="매수점수",
+ascending=False
+)
 
-        # =========================
-        # 🔔 자동 알림
-        # =========================
-        for _, row in df.iterrows():
-            key = row["종목명"]
+# =========================
 
-            if (
-                row["매수점수"] >= 80
-                and (row["골든크로스"] == "YES" or row["거래량비율"] > 1.5)
-                and key not in st.session_state.sent
-            ):
-                msg = f"""
-📊 매수 신호 발생
+# 화면
 
-종목: {row['종목명']}
-현재가: {row['현재가']}
-점수: {row['매수점수']}
-골든크로스: {row['골든크로스']}
-거래량: {row['거래량비율']}
-"""
+# =========================
 
-                send_telegram(msg)
-                st.session_state.sent.add(key)
+st.title("📊 모바일 주식 자동검색기")
 
-    time.sleep(300)  # 🔥 5분마다 실행
+tab1, tab2, tab3, tab4 = st.tabs(
+[
+"전체 TOP",
+"자동추천 TOP3",
+"결과 검색",
+"점수 비교"
+]
+)
+
+with tab1:
+st.dataframe(df, width="stretch")
+
+with tab2:
+st.dataframe(df.head(3), width="stretch")
+
+with tab3:
+keyword = st.text_input("종목명 검색")
+
+```
+if keyword:
+    result_df = df[
+        df["종목명"].str.contains(
+            keyword,
+            case=False,
+            na=False
+        )
+    ]
+
+    st.dataframe(result_df, width="stretch")
+```
+
+with tab4:
+st.bar_chart(
+df.set_index("종목명")["매수점수"]
+)
