@@ -4,14 +4,13 @@ import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
 
 # =========================
-# PAGE CONFIG (반드시 최상단)
+# PAGE CONFIG
 # =========================
 st.set_page_config(page_title="주식 자동검색기", layout="wide")
 
-# 자동 새로고침 (5분)
 st_autorefresh(interval=300000, key="refresh")
 
-st.title("📊 통합 주식 자동검색기 (Excel + 실시간)")
+st.title("📊 통합 주식 자동검색기 (퀀트 점수 시스템)")
 
 # =========================
 # 데이터 로드
@@ -25,7 +24,7 @@ def load_data():
 stocks_df = load_data()
 
 # =========================
-# RSI 계산
+# RSI
 # =========================
 def rsi(series, period=14):
     delta = series.diff()
@@ -40,54 +39,133 @@ def rsi(series, period=14):
 
 
 # =========================
-# 현재가 + RSI 가져오기
+# MACD
 # =========================
-@st.cache_data(ttl=300)
-def get_stock_data(ticker):
-    try:
-        df = yf.Ticker(ticker).history(period="6mo")
-        if df.empty:
-            return None, None
-
-        close = df["Close"]
-        current_price = float(close.iloc[-1])
-        rsi_val = float(rsi(close).iloc[-1])
-
-        return current_price, rsi_val
-
-    except:
-        return None, None
+def macd(series):
+    ema12 = series.ewm(span=12).mean()
+    ema26 = series.ewm(span=26).mean()
+    macd_line = ema12 - ema26
+    signal = macd_line.ewm(span=9).mean()
+    return macd_line, signal
 
 
 # =========================
-# 점수 계산 (간단 버전)
+# FULL 점수 시스템
 # =========================
-def calc_score(rsi_val):
+def calc_score(rsi_val, gap20, drawdown, macd_cross, volume_ratio, alignment, gc):
+
     score = 0
 
     if rsi_val <= 30:
         score += 30
-    elif rsi_val <= 40:
+    elif rsi_val <= 35:
         score += 20
-    elif rsi_val <= 50:
+    elif rsi_val <= 45:
         score += 10
+
+    if gap20 <= -12:
+        score += 30
+    elif gap20 <= -8:
+        score += 20
+    elif gap20 <= -5:
+        score += 10
+
+    if drawdown <= -30:
+        score += 30
+    elif drawdown <= -20:
+        score += 20
+    elif drawdown <= -10:
+        score += 10
+
+    if macd_cross:
+        score += 15
+
+    if volume_ratio >= 1.5:
+        score += 10
+
+    if alignment:
+        score += 10
+
+    if gc:
+        score += 15
 
     return score
 
 
 def get_signal(score):
-    if score >= 70:
+    if score >= 90:
         return "강력매수"
-    elif score >= 50:
+    elif score >= 80:
         return "매수신호"
-    elif score >= 30:
+    elif score >= 60:
         return "관심"
     else:
         return "관망"
 
 
 # =========================
-# 필터 UI
+# 분석 함수
+# =========================
+@st.cache_data(ttl=300)
+def analyze_stock(ticker):
+    try:
+        df = yf.Ticker(ticker).history(period="6mo")
+        if df.empty:
+            return None
+
+        close = df["Close"]
+        volume = df["Volume"]
+
+        current_price = float(close.iloc[-1])
+
+        rsi_val = float(rsi(close).iloc[-1])
+
+        ma5 = close.rolling(5).mean()
+        ma20 = close.rolling(20).mean()
+        ma60 = close.rolling(60).mean()
+
+        current_ma5 = ma5.iloc[-1]
+        current_ma20 = ma20.iloc[-1]
+        current_ma60 = ma60.iloc[-1]
+
+        prev_ma5 = ma5.iloc[-2]
+        prev_ma20 = ma20.iloc[-2]
+
+        gc = (prev_ma5 <= prev_ma20 and current_ma5 > current_ma20)
+
+        alignment = (current_ma5 > current_ma20 > current_ma60)
+
+        avg_volume = volume.rolling(5).mean().iloc[-1]
+        current_volume = volume.iloc[-1]
+        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
+
+        macd_line, signal = macd(close)
+        macd_cross = (macd_line.iloc[-2] <= signal.iloc[-2] and macd_line.iloc[-1] > signal.iloc[-1])
+
+        gap20 = ((current_price - current_ma20) / current_ma20) * 100
+
+        high_price = close.max()
+        drawdown = ((current_price - high_price) / high_price) * 100
+
+        score = calc_score(
+            rsi_val, gap20, drawdown,
+            macd_cross, volume_ratio,
+            alignment, gc
+        )
+
+        return {
+            "현재가": round(current_price, 2),
+            "RSI": round(rsi_val, 2),
+            "점수": score,
+            "신호": get_signal(score)
+        }
+
+    except:
+        return None
+
+
+# =========================
+# 필터
 # =========================
 col1, col2, col3 = st.columns(3)
 
@@ -101,9 +179,6 @@ with col3:
     keyword = st.text_input("종목 검색")
 
 
-# =========================
-# 필터 적용
-# =========================
 filtered = stocks_df.copy()
 
 if country != "전체":
@@ -119,7 +194,7 @@ if keyword:
 
 
 # =========================
-# 분석 실행
+# 실행
 # =========================
 results = []
 
@@ -127,27 +202,21 @@ progress = st.progress(0)
 total = len(filtered)
 
 for i, row in enumerate(filtered.iterrows()):
-
     _, r = row
 
-    price, rsi_val = get_stock_data(r["종목코드"])
+    data = analyze_stock(r["종목코드"])
 
-    if price is None:
-        continue
-
-    score = calc_score(rsi_val)
-    signal = get_signal(score)
-
-    results.append({
-        "종목명": r["종목명"],
-        "종목코드": r["종목코드"],
-        "국가": r["국가"],
-        "섹터": r["섹터"],
-        "현재가": round(price, 2),
-        "RSI": round(rsi_val, 2),
-        "점수": score,
-        "신호": signal
-    })
+    if data:
+        results.append({
+            "종목명": r["종목명"],
+            "종목코드": r["종목코드"],
+            "국가": r["국가"],
+            "섹터": r["섹터"],
+            "현재가": data["현재가"],
+            "RSI": data["RSI"],
+            "점수": data["점수"],
+            "신호": data["신호"]
+        })
 
     progress.progress((i + 1) / total)
 
@@ -164,12 +233,12 @@ df = df.sort_values("점수", ascending=False)
 # =========================
 # TOP 10
 # =========================
-st.subheader("🔥 TOP 10 종목")
+st.subheader("🔥 TOP 10")
 st.dataframe(df.head(10), use_container_width=True)
 
 
 # =========================
-# 전체 테이블
+# 전체
 # =========================
 st.subheader("📊 전체 결과")
 
@@ -187,10 +256,3 @@ st.dataframe(
     use_container_width=True,
     hide_index=True
 )
-
-
-# =========================
-# 차트
-# =========================
-st.subheader("📈 점수 차트")
-st.bar_chart(df.set_index("종목명")["점수"])
