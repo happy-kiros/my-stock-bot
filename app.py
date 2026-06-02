@@ -7,10 +7,9 @@ from streamlit_autorefresh import st_autorefresh
 # PAGE CONFIG
 # =========================
 st.set_page_config(page_title="주식 자동검색기", layout="wide")
-
 st_autorefresh(interval=300000, key="refresh")
 
-st.title("📊 통합 주식 자동검색기 (퀀트 점수 시스템)")
+st.title("📊 통합 주식 자동검색기 (섹터 로테이션 시스템)")
 
 # =========================
 # 데이터 로드
@@ -56,6 +55,7 @@ def calc_score(rsi_val, gap20, drawdown, macd_cross, volume_ratio, alignment, gc
 
     score = 0
 
+    # RSI
     if rsi_val <= 30:
         score += 30
     elif rsi_val <= 35:
@@ -63,6 +63,7 @@ def calc_score(rsi_val, gap20, drawdown, macd_cross, volume_ratio, alignment, gc
     elif rsi_val <= 45:
         score += 10
 
+    # 이격도
     if gap20 <= -12:
         score += 30
     elif gap20 <= -8:
@@ -70,6 +71,7 @@ def calc_score(rsi_val, gap20, drawdown, macd_cross, volume_ratio, alignment, gc
     elif gap20 <= -5:
         score += 10
 
+    # 하락률
     if drawdown <= -30:
         score += 30
     elif drawdown <= -20:
@@ -77,15 +79,19 @@ def calc_score(rsi_val, gap20, drawdown, macd_cross, volume_ratio, alignment, gc
     elif drawdown <= -10:
         score += 10
 
+    # MACD
     if macd_cross:
         score += 15
 
+    # 거래량
     if volume_ratio >= 1.5:
         score += 10
 
+    # 정배열
     if alignment:
         score += 10
 
+    # 골든크로스
     if gc:
         score += 15
 
@@ -165,7 +171,7 @@ def analyze_stock(ticker):
 
 
 # =========================
-# 필터
+# 필터 UI
 # =========================
 col1, col2, col3 = st.columns(3)
 
@@ -179,6 +185,9 @@ with col3:
     keyword = st.text_input("종목 검색")
 
 
+# =========================
+# 필터
+# =========================
 filtered = stocks_df.copy()
 
 if country != "전체":
@@ -194,7 +203,7 @@ if keyword:
 
 
 # =========================
-# 실행
+# 분석
 # =========================
 results = []
 
@@ -231,28 +240,47 @@ df = df.sort_values("점수", ascending=False)
 
 
 # =========================
-# TOP 10
+# 🔥 전체 TOP 10
 # =========================
 st.subheader("🔥 TOP 10")
 st.dataframe(df.head(10), use_container_width=True)
 
 
 # =========================
-# 전체
+# 📊 전체 데이터
 # =========================
 st.subheader("📊 전체 결과")
+st.dataframe(df, use_container_width=True)
 
-st.dataframe(
-    df[[
-        "종목명",
-        "종목코드",
-        "국가",
-        "섹터",
-        "현재가",
-        "RSI",
-        "점수",
-        "신호"
-    ]],
-    use_container_width=True,
-    hide_index=True
-)
+
+# =========================
+# 🔥 섹터별 TOP 3
+# =========================
+st.subheader("📌 섹터별 TOP 3")
+
+for s in df["섹터"].unique():
+    sector_df = df[df["섹터"] == s].sort_values("점수", ascending=False).head(3)
+
+    st.markdown(f"### {s} TOP 3")
+
+    st.dataframe(
+        sector_df[
+            ["종목명", "종목코드", "국가", "현재가", "RSI", "점수", "신호"]
+        ],
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+# =========================
+# 🚀 강세 섹터 분석 (핵심 추가)
+# =========================
+st.subheader("🚀 강세 섹터 분석")
+
+sector_score = df.groupby("섹터")["점수"].mean().sort_values(ascending=False)
+
+best_sector = sector_score.index[0]
+
+st.success(f"🔥 현재 가장 강한 섹터: {best_sector}")
+
+st.dataframe(sector_score.reset_index().rename(columns={"점수": "평균점수"}))
