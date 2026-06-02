@@ -2,6 +2,10 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
+
+# =========================
+# 자동 새로고침 (5분)
+# =========================
 st_autorefresh(interval=300000, key="refresh")
 
 st.set_page_config(page_title="모바일 주식 자동검색기", layout="wide")
@@ -13,7 +17,7 @@ if "sent_alerts" not in st.session_state:
     st.session_state.sent_alerts = set()
 
 # =========================
-# 종목 불러오기
+# 종목 로딩
 # =========================
 try:
     stocks_df = pd.read_excel("stocks.xlsx")
@@ -21,10 +25,31 @@ except:
     st.error("stocks.xlsx 파일이 없습니다.")
     st.stop()
 
+stocks_df.columns = [c.strip() for c in stocks_df.columns]
+
+tickers = stocks_df["종목코드"].dropna().unique().tolist()
+
 # =========================
-# RSI
+# 데이터 다운로드 (핵심: batch)
 # =========================
-def calculate_rsi(series, period=14):
+@st.cache_data(ttl=300)
+def load_data(tickers):
+    data = yf.download(
+        tickers,
+        period="1y",
+        interval="1d",
+        group_by="ticker",
+        threads=True,
+        auto_adjust=True
+    )
+    return data
+
+data = load_data(tickers)
+
+# =========================
+# 지표 함수
+# =========================
+def rsi(series, period=14):
     delta = series.diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -35,20 +60,19 @@ def calculate_rsi(series, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-# =========================
-# MACD
-# =========================
-def calculate_macd(series):
+
+def macd(series):
     ema12 = series.ewm(span=12).mean()
     ema26 = series.ewm(span=26).mean()
-    macd = ema12 - ema26
-    signal = macd.ewm(span=9).mean()
-    return macd, signal
+    macd_line = ema12 - ema26
+    signal = macd_line.ewm(span=9).mean()
+    return macd_line, signal
+
 
 # =========================
-# 점수 계산 (엑셀 로직 그대로)
+# 점수 계산
 # =========================
-def calculate_score(rsi, gap20, drawdown, macd_cross, volume_ratio, alignment, gc_status):
+def calculate_score(rsi_val, gap20, drawdown, macd_cross, volume_ratio, alignment, gc_status):
 
     score = 0
 
@@ -59,11 +83,11 @@ def calculate_score(rsi, gap20, drawdown, macd_cross, volume_ratio, alignment, g
     elif drawdown <= -10:
         score += 10
 
-    if rsi <= 30:
+    if rsi_val <= 30:
         score += 30
-    elif rsi <= 35:
+    elif rsi_val <= 35:
         score += 20
-    elif rsi <= 45:
+    elif rsi_val <= 45:
         score += 10
 
     if gap20 <= -12:
@@ -87,34 +111,42 @@ def calculate_score(rsi, gap20, drawdown, macd_cross, volume_ratio, alignment, g
 
     return score
 
+
 # =========================
-# 종목 분석
+# 분석 엔진 (batch 기반)
 # =========================
-@st.cache_data(ttl=300)
-def analyze_stock(name, ticker):
+results = []
+
+for _, row in stocks_df.iterrows():
+
+    ticker = row["종목코드"]
+    name = row["종목명"]
 
     try:
-        df = yf.Ticker(ticker).history(period="1y", auto_adjust=True)
+        if ticker not in data.columns.get_level_values(0):
+            continue
 
-        if len(df) < 70:
-            return None
+        df = data[ticker].dropna()
 
-        close = df["Close"].dropna()
-        volume = df["Volume"].dropna()
+        if len(df) < 100:
+            continue
+
+        close = df["Close"]
+        volume = df["Volume"]
 
         current_price = float(close.iloc[-1])
 
         # RSI
-        rsi = float(calculate_rsi(close).iloc[-1])
+        rsi_val = float(rsi(close).iloc[-1])
 
         # MA
         ma5 = close.rolling(5).mean()
         ma20 = close.rolling(20).mean()
         ma60 = close.rolling(60).mean()
 
-        current_ma5 = float(ma5.iloc[-1])
-        current_ma20 = float(ma20.iloc[-1])
-        current_ma60 = float(ma60.iloc[-1])
+        current_ma5 = ma5.iloc[-1]
+        current_ma20 = ma20.iloc[-1]
+        current_ma60 = ma60.iloc[-1]
 
         prev_ma5 = ma5.iloc[-2]
         prev_ma20 = ma20.iloc[-2]
@@ -125,11 +157,11 @@ def analyze_stock(name, ticker):
         # 거래량
         avg_volume = volume.rolling(5).mean().iloc[-1]
         current_volume = volume.iloc[-1]
-        volume_ratio = float(current_volume / avg_volume) if avg_volume > 0 else 0
+        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
 
         # MACD
-        macd, signal = calculate_macd(close)
-        macd_cross = (macd.iloc[-2] <= signal.iloc[-2] and macd.iloc[-1] > signal.iloc[-1])
+        macd_line, signal = macd(close)
+        macd_cross = (macd_line.iloc[-2] <= signal.iloc[-2] and macd_line.iloc[-1] > signal.iloc[-1])
 
         # 괴리율
         gap20 = ((current_price - current_ma20) / current_ma20) * 100
@@ -140,7 +172,7 @@ def analyze_stock(name, ticker):
 
         # 점수
         score = calculate_score(
-            rsi, gap20, drawdown,
+            rsi_val, gap20, drawdown,
             macd_cross, volume_ratio,
             alignment, gc_status
         )
@@ -155,33 +187,18 @@ def analyze_stock(name, ticker):
         else:
             signal_text = "관망"
 
-        return {
+        results.append({
             "종목명": name,
+            "종목코드": ticker,
             "현재가": round(current_price, 0),
-            "RSI": round(rsi, 2),
+            "RSI": round(rsi_val, 2),
             "점수": score,
             "신호": signal_text
-        }
+        })
 
     except:
-        return None
+        continue
 
-# =========================
-# 전체 분석
-# =========================
-results = []
-
-progress = st.progress(0)
-total = len(stocks_df)
-
-for idx, row in stocks_df.iterrows():
-
-    result = analyze_stock(row["종목명"], row["종목코드"])
-
-    if result:
-        results.append(result)
-
-    progress.progress((idx + 1) / total)
 
 df = pd.DataFrame(results)
 
@@ -192,24 +209,18 @@ if df.empty:
 df = df.sort_values("점수", ascending=False)
 
 # =========================
-# 🔔 80점 이상 자동 알림 (중복 방지)
+# 알림 (중복 방지)
 # =========================
 for _, row in df.iterrows():
-
     if row["점수"] >= 80:
-
-        key = row["종목명"]
-
-        if key not in st.session_state.sent_alerts:
-
+        if row["종목명"] not in st.session_state.sent_alerts:
             st.error(f"🚨 매수 신호: {row['종목명']} ({row['점수']}점)")
-
-            st.session_state.sent_alerts.add(key)
+            st.session_state.sent_alerts.add(row["종목명"])
 
 # =========================
 # UI
 # =========================
-st.title("📊 모바일 주식 자동검색기")
+st.title("📊 모바일 주식 자동검색기 (고속버전)")
 
 tab1, tab2, tab3 = st.tabs([
     "전체",
