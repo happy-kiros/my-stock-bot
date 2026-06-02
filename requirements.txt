@@ -1,6 +1,7 @@
 streamlit==1.36.0
-pandas>=2.0
-yfinance>=0.2.40
+pandas
+yfinance
 requests
 openpyxl
 streamlit-autorefresh
+altair==5.0.1
