@@ -1,3 +1,4 @@
+st.set_page_config(page_title="모바일 주식 자동검색기", layout="wide")
 import streamlit as st
 import pandas as pd
 import yfinance as yf
@@ -7,8 +8,6 @@ from streamlit_autorefresh import st_autorefresh
 # 자동 새로고침 (5분)
 # =========================
 st_autorefresh(interval=300000, key="refresh")
-
-st.set_page_config(page_title="모바일 주식 자동검색기", layout="wide")
 
 # =========================
 # 세션 상태 (알림 중복 방지)
