@@ -1,6 +1,6 @@
-streamlit
-pandas
-yfinance
+streamlit==1.36.0
+pandas>=2.0
+yfinance>=0.2.40
 requests
 openpyxl
 streamlit-autorefresh
