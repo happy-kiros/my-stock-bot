@@ -3,15 +3,18 @@ import pandas as pd
 import yfinance as yf
 import datetime
 
-st.subheader("💾 데이터 백업")
+st.subheader("💾 데이터 백업 (CSV 다운로드)")
 
-if st.button("엑셀 백업 저장"):
+file_name = f"stock_backup_{datetime.date.today()}.csv"
 
-    filename = f"backup_{datetime.date.today()}.xlsx"
+csv = df.to_csv(index=False).encode("utf-8-sig")
 
-    df.to_excel(filename, index=False)
-
-    st.success(f"백업 완료: {filename}")
+st.download_button(
+    label="📥 오늘 데이터 다운로드",
+    data=csv,
+    file_name=file_name,
+    mime="text/csv"
+)
 
 # =========================
 # 페이지 설정 (항상 맨 위!)
