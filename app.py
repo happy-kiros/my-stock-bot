@@ -1,6 +1,17 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+import datetime
+
+st.subheader("💾 데이터 백업")
+
+if st.button("엑셀 백업 저장"):
+
+    filename = f"backup_{datetime.date.today()}.xlsx"
+
+    df.to_excel(filename, index=False)
+
+    st.success(f"백업 완료: {filename}")
 
 # =========================
 # 페이지 설정 (항상 맨 위!)
